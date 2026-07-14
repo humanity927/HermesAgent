@@ -43,8 +43,9 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
+REPOSITORY="NousResearch/hermes-agent"
+REPO_URL_SSH=""
+REPO_URL_HTTPS=""
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -117,6 +118,10 @@ while [[ $# -gt 0 ]]; do
             INSTALL_COMMIT="$2"
             shift 2
             ;;
+        --repository|-Repository)
+            REPOSITORY="$2"
+            shift 2
+            ;;
         --manifest|-Manifest)
             MANIFEST_MODE=true
             shift
@@ -168,6 +173,7 @@ while [[ $# -gt 0 ]]; do
             echo "                   'hermes update' runs never inject bundled skills either"
             echo "  --branch NAME  Git branch to install (default: main)"
             echo "  --commit SHA   Pin checkout to a specific commit after clone/update"
+            echo "  --repository OWNER/REPO  GitHub repository to install"
             echo "  --manifest     Print desktop bootstrap stage manifest as JSON"
             echo "  --stage NAME   Run one desktop bootstrap stage"
             echo "  --json         Print a JSON result frame for --stage"
@@ -201,6 +207,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "Invalid GitHub repository '$REPOSITORY' (expected OWNER/REPO)" >&2
+    exit 1
+fi
+REPO_URL_SSH="git@github.com:${REPOSITORY}.git"
+REPO_URL_HTTPS="https://github.com/${REPOSITORY}.git"
 
 # ============================================================================
 # Helper functions
@@ -1219,6 +1232,13 @@ clone_repo() {
             # every ref, and this repo carries thousands of auto-generated
             # branches — on a non-single-branch checkout that turns each update
             # into a multi-minute download that can stall the installer.
+            current_origin="$(git remote get-url origin 2>/dev/null || true)"
+            if [ -z "$current_origin" ]; then
+                git remote add origin "$REPO_URL_HTTPS"
+            elif [ "$current_origin" != "$REPO_URL_HTTPS" ] && [ "$current_origin" != "$REPO_URL_SSH" ]; then
+                log_info "Updating managed repository source to $REPOSITORY..."
+                git remote set-url origin "$REPO_URL_HTTPS"
+            fi
             git remote set-branches origin "$BRANCH" 2>/dev/null || true
             git fetch origin "$BRANCH"
             git checkout "$BRANCH"

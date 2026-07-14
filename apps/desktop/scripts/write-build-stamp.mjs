@@ -9,6 +9,7 @@
  * Schema (subject to bump via STAMP_SCHEMA_VERSION):
  *   {
  *     "schemaVersion": 1,
+ *     "repository":    "<github-owner>/<github-repo>",
  *     "commit":        "<40-char SHA>",
  *     "branch":        "<branch name>",
  *     "builtAt":       "<ISO 8601 UTC timestamp>",
@@ -31,6 +32,7 @@ import { resolve, join, relative } from "path"
 import { execSync } from "child_process"
 
 const STAMP_SCHEMA_VERSION = 1
+const GITHUB_REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 const DESKTOP_ROOT = resolve(import.meta.dirname, "..")
 const REPO_ROOT = resolve(DESKTOP_ROOT, "..", "..")
@@ -45,11 +47,33 @@ function tryExec(cmd, opts) {
   }
 }
 
+function normalizeGitHubRepository(value) {
+  const raw = String(value || "").trim().replace(/\.git$/i, "")
+  const direct = GITHUB_REPOSITORY_RE.test(raw) ? raw : null
+  if (direct) return direct
+
+  const patterns = [
+    /^git@github\.com:([^/]+\/[^/]+)$/i,
+    /^ssh:\/\/git@github\.com\/([^/]+\/[^/]+)$/i,
+    /^https?:\/\/github\.com\/([^/]+\/[^/]+)$/i
+  ]
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (match && GITHUB_REPOSITORY_RE.test(match[1])) return match[1]
+  }
+  return null
+}
+
+function localGitHubRepository() {
+  return normalizeGitHubRepository(tryExec("git remote get-url origin", { cwd: REPO_ROOT }))
+}
+
 function fromCI() {
   const sha = process.env.GITHUB_SHA
   if (!sha) return null
   const branch = process.env.GITHUB_REF_NAME || process.env.GITHUB_HEAD_REF || null
   return {
+    repository: normalizeGitHubRepository(process.env.GITHUB_REPOSITORY) || localGitHubRepository(),
     commit: sha,
     branch: branch,
     dirty: false, // CI builds from a checkout-of-ref by definition
@@ -70,6 +94,7 @@ function fromLocalGit() {
   const status = tryExec("git status --porcelain -uno", { cwd: REPO_ROOT })
   const dirty = status !== null && status.length > 0
   return {
+    repository: localGitHubRepository(),
     commit: sha,
     branch: branch === "HEAD" ? null : branch, // detached HEAD -> null
     dirty: dirty,
@@ -79,15 +104,16 @@ function fromLocalGit() {
 
 function main() {
   const stamp = fromCI() || fromLocalGit()
-  if (!stamp || !stamp.commit) {
+  if (!stamp || !stamp.commit || !stamp.repository) {
     console.error(
       "[write-build-stamp] ERROR: could not determine git commit.\n" +
         "  - $GITHUB_SHA not set\n" +
         "  - `git rev-parse HEAD` failed at " +
         REPO_ROOT +
         "\n" +
-        "Packaged builds require a git ref to pin first-launch install.ps1\n" +
-        "against. Run from a git checkout or set $GITHUB_SHA explicitly."
+        "Packaged builds require a GitHub repository and git ref to pin first-launch install.ps1\n" +
+        "against. Run from a GitHub checkout with an origin remote, or set both\n" +
+        "$GITHUB_REPOSITORY and $GITHUB_SHA explicitly."
     )
     process.exit(1)
   }
@@ -104,6 +130,7 @@ function main() {
 
   const payload = {
     schemaVersion: STAMP_SCHEMA_VERSION,
+    repository: stamp.repository,
     commit: stamp.commit,
     branch: stamp.branch,
     builtAt: new Date().toISOString(),
@@ -117,6 +144,8 @@ function main() {
     "[write-build-stamp] wrote " +
       relative(REPO_ROOT, OUT_FILE) +
       " -> " +
+      stamp.repository +
+      "@" +
       stamp.commit.slice(0, 12) +
       (stamp.branch ? " (" + stamp.branch + ")" : "") +
       (stamp.dirty ? " [DIRTY]" : "")

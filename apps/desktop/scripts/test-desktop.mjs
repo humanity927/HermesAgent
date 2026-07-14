@@ -306,7 +306,9 @@ function validateBundle() {
     )
   }
 
-  // Positive assertion: install-stamp.json carries a sane commit + branch
+  // Positive assertion: install-stamp.json carries a sane repository, commit,
+  // and branch. A commit without repository provenance can produce a package
+  // that builds successfully but fails first launch with a raw GitHub 404.
   const stampPath = path.join(APP.resourcesPath, 'install-stamp.json')
   if (!exists(stampPath)) {
     die(`Missing install-stamp.json (required for first-launch bootstrap pinning): ${stampPath}`)
@@ -319,6 +321,13 @@ function validateBundle() {
   }
   if (!stamp.commit || typeof stamp.commit !== 'string' || stamp.commit.length < 7) {
     die(`install-stamp.json is missing a usable commit field: ${JSON.stringify(stamp)}`)
+  }
+  if (
+    !stamp.repository ||
+    typeof stamp.repository !== 'string' ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(stamp.repository)
+  ) {
+    die(`install-stamp.json is missing a usable repository field: ${JSON.stringify(stamp)}`)
   }
   if (!stamp.branch || typeof stamp.branch !== 'string') {
     die(`install-stamp.json is missing the branch field: ${JSON.stringify(stamp)}`)
@@ -391,7 +400,7 @@ function printArtifacts(options = {}) {
   }
   console.log(`  runtime: ${runtimeRoot}`)
   if (stamp) {
-    console.log(`  install-stamp: ${stamp.commit.slice(0, 12)} on ${stamp.branch}`)
+    console.log(`  install-stamp: ${stamp.repository}@${stamp.commit.slice(0, 12)} on ${stamp.branch}`)
   }
   if (options.nodeBinaries && options.nodeBinaries.length > 0) {
     console.log(`  node-pty binaries: ${options.nodeBinaries.join(', ')}`)

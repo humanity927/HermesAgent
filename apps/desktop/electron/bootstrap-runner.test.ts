@@ -4,13 +4,59 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { cachedScriptPath, installedAgentInstallScript, resolveInstallScript, runBootstrap } from './bootstrap-runner'
+import {
+  buildPinArgs,
+  buildPosixPinArgs,
+  cachedScriptPath,
+  githubRepositoryFromInstallStamp,
+  installedAgentInstallScript,
+  installScriptUrl,
+  resolveInstallScript,
+  runBootstrap
+} from './bootstrap-runner'
 
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
 
 function mkTmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-test-'))
 }
+
+test('install stamp repository defaults to official and accepts a GitHub fork', () => {
+  assert.equal(githubRepositoryFromInstallStamp(null), 'NousResearch/hermes-agent')
+  assert.equal(
+    githubRepositoryFromInstallStamp({ repository: 'humanity927/HermesAgent' }),
+    'humanity927/HermesAgent'
+  )
+  assert.throws(
+    () => githubRepositoryFromInstallStamp({ repository: 'https://github.com/humanity927/HermesAgent' }),
+    /Invalid GitHub repository/
+  )
+})
+
+test('fork repository is used for script URL, cache key, and installer arguments', () => {
+  const repository = 'humanity927/HermesAgent'
+  const commit = 'a'.repeat(40)
+  const stamp = { repository, commit, branch: 'main' }
+
+  assert.equal(
+    installScriptUrl(repository, commit),
+    `https://raw.githubusercontent.com/${repository}/${commit}/scripts/${SCRIPT_NAME}`
+  )
+  assert.match(cachedScriptPath('C:/hermes', commit, repository), /humanity927-HermesAgent/)
+  assert.deepEqual(buildPinArgs(stamp), ['-Repository', repository, '-Commit', commit, '-Branch', 'main'])
+  assert.deepEqual(buildPosixPinArgs({ installStamp: stamp, activeRoot: '/agent', hermesHome: '/home' }), [
+    '--dir',
+    '/agent',
+    '--hermes-home',
+    '/home',
+    '--repository',
+    repository,
+    '--branch',
+    'main',
+    '--commit',
+    commit
+  ])
+})
 
 test('runBootstrap bails immediately when the signal is already aborted', async () => {
   const controller = new AbortController()

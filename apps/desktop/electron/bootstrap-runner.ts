@@ -49,6 +49,8 @@ function hiddenWindowsChildOptions(options = {}) {
 }
 
 const STAMP_COMMIT_RE = /^[0-9a-f]{7,40}$/i
+const DEFAULT_GITHUB_REPOSITORY = 'NousResearch/hermes-agent'
+const GITHUB_REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 // Stages flagged needs_user_input=true in the manifest are skipped by the
 // runner (passed -NonInteractive to install.ps1, which the install script
@@ -107,16 +109,40 @@ function installedAgentInstallScript(hermesHome) {
   }
 }
 
-function cachedScriptPath(hermesHome, commit) {
-  return path.join(bootstrapCacheDir(hermesHome), `install-${commit}.${process.platform === 'win32' ? 'ps1' : 'sh'}`)
+function githubRepositoryFromInstallStamp(installStamp) {
+  const repository = installStamp?.repository || DEFAULT_GITHUB_REPOSITORY
+
+  if (!GITHUB_REPOSITORY_RE.test(repository)) {
+    throw new Error(`Invalid GitHub repository in install stamp: ${repository}`)
+  }
+
+  return repository
 }
 
-function downloadInstallScript(commit, destPath) {
+function installScriptUrl(repository, commit) {
+  const validatedRepository = githubRepositoryFromInstallStamp({ repository })
+  const scriptName = installScriptName()
+
+  return `https://raw.githubusercontent.com/${validatedRepository}/${commit}/scripts/${scriptName}`
+}
+
+function cachedScriptPath(hermesHome, commit, repository = DEFAULT_GITHUB_REPOSITORY) {
+  const validatedRepository = githubRepositoryFromInstallStamp({ repository })
+  const repositoryKey =
+    validatedRepository === DEFAULT_GITHUB_REPOSITORY ? '' : `${validatedRepository.replace('/', '-')}-`
+
+  return path.join(
+    bootstrapCacheDir(hermesHome),
+    `install-${repositoryKey}${commit}.${process.platform === 'win32' ? 'ps1' : 'sh'}`
+  )
+}
+
+function downloadInstallScript(repository, commit, destPath) {
   // Fetch from GitHub raw at the pinned commit. The raw URL with a SHA
   // is immutable (unlike a branch ref), so we don't need integrity
   // verification beyond "did the file we wrote pass a syntax probe."
   const scriptName = installScriptName()
-  const url = `https://raw.githubusercontent.com/NousResearch/hermes-agent/${commit}/scripts/${scriptName}`
+  const url = installScriptUrl(repository, commit)
 
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
@@ -223,13 +249,14 @@ async function resolveInstallScript({
     )
   }
 
-  const cached = cachedScriptPath(hermesHome, installStamp.commit)
+  const repository = githubRepositoryFromInstallStamp(installStamp)
+  const cached = cachedScriptPath(hermesHome, installStamp.commit, repository)
 
   try {
     await fsp.access(cached, fs.constants.R_OK)
     emit({
       type: 'log',
-      line: `[bootstrap] using cached ${installScriptName()} for ${installStamp.commit.slice(0, 12)}`
+      line: `[bootstrap] using cached ${installScriptName()} for ${repository}@${installStamp.commit.slice(0, 12)}`
     })
 
     return { path: cached, source: 'cache', commit: installStamp.commit, kind: installScriptKind() }
@@ -239,11 +266,11 @@ async function resolveInstallScript({
 
   emit({
     type: 'log',
-    line: `[bootstrap] fetching ${installScriptName()} for ${installStamp.commit.slice(0, 12)} from GitHub`
+    line: `[bootstrap] fetching ${installScriptName()} for ${repository}@${installStamp.commit.slice(0, 12)} from GitHub`
   })
 
   try {
-    await _download(installStamp.commit, cached)
+    await _download(repository, installStamp.commit, cached)
     emit({ type: 'log', line: `[bootstrap] saved to ${cached}` })
 
     return { path: cached, source: 'download', commit: installStamp.commit, kind: installScriptKind() }
@@ -533,7 +560,7 @@ function spawnBash(scriptPath, args, { emit, stageName, abortSignal, hermesHome 
 // so the repository stage clones the exact SHA the .exe was tested with
 // instead of falling back to install.ps1's default ($Branch = "main").
 function buildPinArgs(installStamp) {
-  const args = []
+  const args = ['-Repository', githubRepositoryFromInstallStamp(installStamp)]
 
   if (installStamp && installStamp.commit) {
     args.push('-Commit', installStamp.commit)
@@ -547,7 +574,14 @@ function buildPinArgs(installStamp) {
 }
 
 function buildPosixPinArgs({ installStamp, activeRoot, hermesHome }) {
-  const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
+  const args = [
+    '--dir',
+    activeRoot,
+    '--hermes-home',
+    hermesHome,
+    '--repository',
+    githubRepositoryFromInstallStamp(installStamp)
+  ]
 
   if (installStamp && installStamp.branch) {
     args.push('--branch', installStamp.branch)
@@ -847,8 +881,12 @@ async function runBootstrap(opts) {
 }
 
 export {
+  buildPinArgs,
+  buildPosixPinArgs,
   cachedScriptPath,
+  githubRepositoryFromInstallStamp,
   installedAgentInstallScript,
+  installScriptUrl,
   // Exposed for testability
   parseStageResult,
   resolveInstallScript,
